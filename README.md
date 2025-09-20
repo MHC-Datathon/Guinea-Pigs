@@ -3,7 +3,7 @@ Create a map of all the hotspots of where violations are occuring. Add colorcodi
 
 Roles: 
 
-- Pawel:
+- Pawel: Web Developer {React, Vite, Frontend}, Set up React + Vite page for project
 
 
 - Oleksii:
