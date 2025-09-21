@@ -36,7 +36,7 @@ A root endpoint to check if the server is running.
 
 Returns: {"message": "Welcome to the MTA Datathon API Backend!"}
 
-### GET /api/convictions
+### GET /api/violations
 
 Fetches the entire MTA ACE Violations dataset.
 
