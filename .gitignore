@@ -1,0 +1,7 @@
+dataset-patterns/data/mta_bus_camera_violations.csv
+# Ignore large CSV and data files
+*.csv
+*.tsv
+*.parquet
+dataset-patterns/data/
+!/dataset-patterns/data/*.sample.csv
