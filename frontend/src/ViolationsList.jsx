@@ -32,6 +32,13 @@ function ViolationsList() {
         const result = await response.json();
         console.log("4. Parsed JSON successfully.");
         setViolations(result.data);
+        // publish the fresh violations so the map can consume and cluster them
+        try {
+          window.__GP_VIOLATIONS = result.data;
+          window.dispatchEvent(new CustomEvent("gp-violations-updated", { detail: { violations: result.data } }));
+        } catch (e) {
+          console.warn("Could not dispatch gp-violations-updated:", e);
+        }
 
     } catch (error) {
         if (error.name === 'AbortError') {

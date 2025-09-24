@@ -40,8 +40,11 @@ function getColorForZone(zone) {
 export default function GoogleMapsPolygons() {
   const containerRef = useRef(null);
   const mapRef = useRef(null);
+  const dataListenerRef = useRef(null);
+  const scriptId = "gp-gmaps-script";
   const polygonsRef = useRef([]);
   const infoWindowRef = useRef(null);
+  const clusterMarkersRef = useRef([]);
 
   // Load Google Maps JS API dynamically
   useEffect(() => {
@@ -53,11 +56,23 @@ export default function GoogleMapsPolygons() {
       initMap();
       return;
     }
-    const script = document.createElement("script");
-    script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=geometry`;
-    script.async = true;
-    script.onload = initMap;
-    document.head.appendChild(script);
+    // Avoid inserting the Maps script multiple times
+    if (!document.getElementById(scriptId)) {
+      const script = document.createElement("script");
+      script.id = scriptId;
+      script.src = `https://maps.googleapis.com/maps/api/js?key=${GOOGLE_MAPS_API_KEY}&libraries=geometry`;
+      script.async = true;
+      script.onload = initMap;
+      document.head.appendChild(script);
+    } else {
+      // script already on the page but maps may not be ready yet; wait briefly
+      const t = setInterval(() => {
+        if (window.google && window.google.maps) {
+          clearInterval(t);
+          initMap();
+        }
+      }, 100);
+    }
     return () => {
       // cleanup script if needed
     };
@@ -65,8 +80,10 @@ export default function GoogleMapsPolygons() {
 
   // Initialize map and load data
   function initMap() {
-    if (!containerRef.current) return;
-    mapRef.current = new window.google.maps.Map(containerRef.current, {
+  if (!containerRef.current) return;
+  // guard against double initialization
+  if (mapRef.current) return;
+  mapRef.current = new window.google.maps.Map(containerRef.current, {
       center: { lat: 40.7128, lng: -74.0060 },
       zoom: 11,
       mapId: "181496049de10d4f8807568e",
@@ -88,8 +105,259 @@ export default function GoogleMapsPolygons() {
       // non-fatal
       console.warn("Could not inject InfoWindow styles:", e);
     }
-    fetchAndRender();
+  fetchAndRender();
+
+    // listen for violations data updates to render clusters
+    try {
+      window.addEventListener("gp-violations-updated", handleViolationsUpdated);
+    } catch (e) {}
+
+    // create a debug/test cluster in the middle of NYC so you can verify clustering
+    try {
+      createTestCluster();
+    } catch (e) {
+      // ignore
+    }
+    // If violations were fetched before the map initialized, render them now
+    try {
+      const cached = window.__GP_VIOLATIONS;
+      if (cached && Array.isArray(cached) && cached.length > 0) {
+        // small timeout to ensure map is fully ready
+        setTimeout(() => {
+          try { renderClusters(cached); } catch (e) { console.warn('renderClusters on init failed', e); }
+        }, 50);
+      }
+    } catch (e) {}
   }
+
+  function handleViolationsUpdated(e) {
+    const violations = (e && e.detail && e.detail.violations) || window.__GP_VIOLATIONS || [];
+    console.log("gp-violations-updated received, count=", (violations && violations.length) || 0, "event detail:", e && e.detail);
+    try {
+      renderClusters(violations);
+    } catch (err) {
+      console.warn("Cluster render failed:", err);
+    }
+  }
+
+  function clearClusterMarkers() {
+    try {
+      // Preserve any markers intentionally marked as persistent (e.g., test marker)
+      const keep = [];
+      for (const m of clusterMarkersRef.current || []) {
+        try {
+          if (m && m.__gp_persistent) {
+            // keep on-map and in the array
+            keep.push(m);
+            continue;
+          }
+          try { m.setMap(null); } catch (e) {}
+        } catch (e) {}
+      }
+      clusterMarkersRef.current = keep;
+    } finally {
+      if (!clusterMarkersRef.current) clusterMarkersRef.current = [];
+    }
+  }
+
+  // Choose a color for a cluster marker based on how many items it represents.
+  // Small: green, medium: orange, large: red. Tweak thresholds as needed.
+
+  // Deterministic color selection for bus route IDs.
+  // You can override at runtime with window.GP_ROUTE_COLORS = { 'BX36': '#abc', ... }
+  const _routeColorCache = {};
+  // Generate 39 visually distinct, muted colors by mapping routeId hash -> hue buckets
+  // We vary lightness in three tiers to increase perceptual separation while keeping colors easy on the eyes.
+  // You can override colors at runtime with window.GP_ROUTE_COLORS = { 'BX36': '#abc', ... }
+  function getColorForBusRoute(routeId) {
+    try {
+      if (!routeId) return null;
+      const custom = window && window.GP_ROUTE_COLORS;
+      if (custom && custom[routeId]) return custom[routeId];
+      if (_routeColorCache[routeId]) return _routeColorCache[routeId];
+      // simple hash to integer
+      let h = 0;
+      for (let i = 0; i < routeId.length; i++) {
+        h = (h << 5) - h + routeId.charCodeAt(i);
+        h |= 0;
+      }
+  // Use the golden angle to spread hues for better perceptual separation
+  const buckets = 39; // number of distinct hues requested
+  const idx = Math.abs(h) % buckets;
+  const GOLDEN_ANGLE = 137.50776405003785; // degrees
+  const hue = Math.round((idx * GOLDEN_ANGLE) % 360);
+      // muted saturation and three lightness tiers to increase distinctiveness
+      const saturation = 60; // percent, slightly muted
+      const tier = idx % 3; // 0,1,2
+      const lightness = 44 + tier * 6; // values: 44,50,56
+      const color = `hsl(${hue},${saturation}%,${lightness}%)`;
+      _routeColorCache[routeId] = color;
+      return color;
+    } catch (e) {
+      return null;
+    }
+  }
+
+  // Naive clustering: bucket points into screen-space grid cells
+  function renderClusters(violations) {
+    if (!mapRef.current) return;
+    clearClusterMarkers();
+    console.log("renderClusters called, violations length:", violations && violations.length);
+    if (!violations || violations.length === 0) return;
+
+    // Use simple grid in lat/lng space as fallback
+  // even smaller grid to produce denser clusters (~500m). Reduce to taste.
+  const gridSizeDeg = 0.005; // roughly ~0.5km grid
+    const buckets = new Map();
+
+    const extractLatLng = (v) => {
+      const toNum = (x) => {
+        const n = parseFloat(x);
+        return Number.isFinite(n) ? n : null;
+      };
+      if (v == null) return null;
+      // various common shapes
+      if (v.latitude && v.longitude) {
+        const lat = toNum(v.latitude);
+        const lng = toNum(v.longitude);
+        if (lat !== null && lng !== null) return { lat, lng };
+      }
+      // dataset uses violation_latitude / violation_longitude
+      if (v.violation_latitude && v.violation_longitude) {
+        const lat = toNum(v.violation_latitude);
+        const lng = toNum(v.violation_longitude);
+        if (lat !== null && lng !== null) return { lat, lng };
+      }
+      if (v.lat && v.lng) {
+        const lat = toNum(v.lat);
+        const lng = toNum(v.lng);
+        if (lat !== null && lng !== null) return { lat, lng };
+      }
+      if (v.location && (v.location.latitude || v.location.lat || v.location.longitude || v.location.lon)) {
+        const lat = toNum(v.location.latitude || v.location.lat);
+        const lng = toNum(v.location.longitude || v.location.lon || v.location.lng);
+        if (lat !== null && lng !== null) return { lat, lng };
+      }
+      // violation_georeference or bus_stop_georeference { type: 'Point', coordinates: [lng, lat] }
+      if (v.violation_georeference && Array.isArray(v.violation_georeference.coordinates)) {
+        const c = v.violation_georeference.coordinates;
+        const lat = toNum(c[1]);
+        const lng = toNum(c[0]);
+        if (lat !== null && lng !== null) return { lat, lng };
+      }
+      if (v.bus_stop_georeference && Array.isArray(v.bus_stop_georeference.coordinates)) {
+        const c = v.bus_stop_georeference.coordinates;
+        const lat = toNum(c[1]);
+        const lng = toNum(c[0]);
+        if (lat !== null && lng !== null) return { lat, lng };
+      }
+      // also try bus_stop_latitude / bus_stop_longitude
+      if (v.bus_stop_latitude && v.bus_stop_longitude) {
+        const lat = toNum(v.bus_stop_latitude);
+        const lng = toNum(v.bus_stop_longitude);
+        if (lat !== null && lng !== null) return { lat, lng };
+      }
+      // Socrata-like the_geom: [lng, lat] or nested
+      if (v.the_geom && v.the_geom.coordinates) {
+        const c = v.the_geom.coordinates;
+        // Point
+        if (typeof c[0] === 'number' && typeof c[1] === 'number') {
+          return { lat: toNum(c[1]), lng: toNum(c[0]) };
+        }
+        // nested arrays (Polygon / MultiPolygon), try to find first numeric pair
+        const findFirstPair = (arr) => {
+          if (!Array.isArray(arr)) return null;
+          for (const item of arr) {
+            if (Array.isArray(item) && typeof item[0] === 'number' && typeof item[1] === 'number') return item;
+            const found = findFirstPair(item);
+            if (found) return found;
+          }
+          return null;
+        };
+        const p = findFirstPair(c);
+        if (p) return { lat: toNum(p[1]), lng: toNum(p[0]) };
+      }
+      // as a last resort, try top-level numeric fields named x/y
+      if (v.x && v.y) {
+        const lat = toNum(v.y);
+        const lng = toNum(v.x);
+        if (lat !== null && lng !== null) return { lat, lng };
+      }
+      return null;
+    };
+
+    let extracted = 0;
+    for (const v of violations) {
+      const pt = extractLatLng(v);
+      if (pt && Number.isFinite(pt.lat) && Number.isFinite(pt.lng)) {
+        extracted += 1;
+        const key = `${Math.round(pt.lat / gridSizeDeg)}_${Math.round(pt.lng / gridSizeDeg)}`;
+        if (!buckets.has(key)) buckets.set(key, { latSum: 0, lngSum: 0, count: 0, items: [] });
+        const b = buckets.get(key);
+        b.latSum += pt.lat; b.lngSum += pt.lng; b.count += 1; b.items.push(v);
+      }
+    }
+
+    console.log("extracted points:", extracted, "buckets:", buckets.size);
+
+    for (const [k, b] of buckets.entries()) {
+      const avgLat = b.latSum / b.count;
+      const avgLng = b.lngSum / b.count;
+      // pick the most common bus_route_id in this bucket if available
+      let modeRoute = null;
+      try {
+        const rc = {};
+        for (const it of b.items) {
+          const rid = (it && (it.bus_route_id || it.busRouteId || it.route)) || null;
+          if (!rid) continue;
+          rc[rid] = (rc[rid] || 0) + 1;
+        }
+        modeRoute = Object.keys(rc).sort((a, b2) => rc[b2] - rc[a])[0] || null;
+      } catch (e) { modeRoute = null; }
+      const routeColor = modeRoute ? getColorForBusRoute(modeRoute) : null;
+      const color = routeColor || getClusterColor(b.count);
+      // build compact SVG icon with centered count text for maximum readability
+      const size = Math.max(14, Math.min(34, Math.round(14 + Math.sqrt(b.count) * 1.8)));
+      const fontSize = Math.max(8, Math.round(size / 2.8));
+      const svg = `
+        <svg xmlns='http://www.w3.org/2000/svg' width='${size}' height='${size}' viewBox='0 0 ${size} ${size}'>
+          <circle cx='${size / 2}' cy='${size / 2}' r='${size / 2 - 1}' fill='${color}' stroke='white' stroke-width='2' />
+          <text x='50%' y='50%' dy='.35em' text-anchor='middle' font-family='Arial, Helvetica, sans-serif' font-size='${fontSize}' fill='#ffffff'>${b.count}</text>
+        </svg>`;
+      const url = 'data:image/svg+xml;charset=UTF-8,' + encodeURIComponent(svg);
+      const marker = new window.google.maps.Marker({
+        position: { lat: avgLat, lng: avgLng },
+        map: mapRef.current,
+        title: `${b.count} violations`,
+        icon: {
+          url,
+          scaledSize: new window.google.maps.Size(size, size),
+        },
+      });
+      marker.addListener("click", () => {
+        // Build cluster info: count + bus route + stop name, omit violation_type if 'exempt'
+        const sample = b.items[0] || {};
+        const parts = [];
+        parts.push(`<div><strong>Violations: ${b.count}</strong></div>`);
+        if (sample.bus_route_id) parts.push(`<div><strong>Bus route:</strong> ${sample.bus_route_id}</div>`);
+        if (sample.stop_name) parts.push(`<div><strong>Stop:</strong> ${sample.stop_name}</div>`);
+        if (sample.violation_type && typeof sample.violation_type === 'string' && !sample.violation_type.toLowerCase().includes('exempt')) {
+          parts.push(`<div><strong>Type:</strong> ${sample.violation_type}</div>`);
+        }
+        const content = `<div>${parts.join('')}</div>`;
+        if (infoWindowRef.current) {
+          infoWindowRef.current.setContent(content);
+          infoWindowRef.current.setPosition({ lat: avgLat, lng: avgLng });
+          infoWindowRef.current.open(mapRef.current);
+        }
+      });
+      clusterMarkersRef.current.push(marker);
+    }
+    if (extracted === 0) {
+      console.warn("No valid lat/lng could be extracted from violations array. Check field names and data shape. Example violation:", violations[0]);
+    }
+  }
+
 
   async function fetchAndRender() {
     try {
@@ -100,6 +368,18 @@ export default function GoogleMapsPolygons() {
       const data = await res.json();
       if (!data) return;
 
+      // clear previous data layer and polygons
+      try {
+        mapRef.current.data && mapRef.current.data.forEach && mapRef.current.data.forEach((f) => mapRef.current.data.remove(f));
+      } catch (e) {}
+      // remove previous generated polygons
+      try {
+        for (const p of polygonsRef.current || []) {
+          try { p.setMap(null); } catch (e) {}
+        }
+        polygonsRef.current = [];
+      } catch (e) {}
+
       // If the response is GeoJSON-like (has "type" & "features"), add directly
       if (data.type && data.features) {
         // data is GeoJSON
@@ -107,7 +387,11 @@ export default function GoogleMapsPolygons() {
         styleDataLayer();
 
         // show properties in an InfoWindow when a feature is clicked
-        mapRef.current.data.addListener("click", (event) => {
+        // remove any previously attached click listener on data
+        try {
+          if (dataListenerRef.current && dataListenerRef.current.remove) dataListenerRef.current.remove();
+        } catch (e) {}
+        dataListenerRef.current = mapRef.current.data.addListener("click", (event) => {
           const f = event.feature;
           // requested properties
           // include the actual property names present in the GeoJSON (case-sensitive)
@@ -130,13 +414,15 @@ export default function GoogleMapsPolygons() {
             infoWindowRef.current.setPosition(event.latLng);
           }
           infoWindowRef.current.open(mapRef.current);
-        });
+  });
         return;
       }
 
       // Otherwise treat as array of records; try to extract points
       const points = []; // [ [lng, lat], ... ] for turf
       for (const r of data) {
+  // Skip records that are marked exempt
+  if (r && r.violation_type && typeof r.violation_type === 'string' && r.violation_type.toLowerCase().includes('exempt')) continue;
         // Common Socrata shape: r.location may be object {latitude, longitude} or r.the_geom
         if (r.latitude && r.longitude) {
           const lat = parseFloat(r.latitude);
@@ -169,7 +455,26 @@ export default function GoogleMapsPolygons() {
       }
 
       // Convert turf polygon coords to google.maps.LatLngLiteral array
-      const coords = hull.geometry.coordinates[0].map(([lng, lat]) => ({ lat, lng }));
+      // hull may be Polygon or MultiPolygon; find the first linear ring
+      let ring = null;
+      if (!hull || !hull.geometry) {
+        console.warn("Hull geometry missing");
+        return;
+      }
+      if (hull.geometry.type === "Polygon") {
+        ring = hull.geometry.coordinates[0];
+      } else if (hull.geometry.type === "MultiPolygon") {
+        // take the first polygon's outer ring
+        ring = hull.geometry.coordinates[0] && hull.geometry.coordinates[0][0];
+      } else {
+        console.warn("Unsupported hull geometry type:", hull.geometry.type);
+        return;
+      }
+      if (!ring || !Array.isArray(ring) || ring.length === 0) {
+        console.warn("No coordinates found in hull");
+        return;
+      }
+      const coords = ring.map(([lng, lat]) => ({ lat, lng }));
 
       // Determine a representative zone from the records (mode) if possible
       let modeZone = null;
@@ -196,7 +501,7 @@ export default function GoogleMapsPolygons() {
         fillColor: polyColor,
         fillOpacity: 0.35,
       });
-      polygon.setMap(mapRef.current);
+  if (mapRef.current) polygon.setMap(mapRef.current);
       polygonsRef.current.push(polygon);
 
       // clicking the generated polygon shows a simple summary (no per-feature props available)
@@ -209,10 +514,16 @@ export default function GoogleMapsPolygons() {
         }
       });
 
-      // Fit map to polygon bounds
-      const bounds = new window.google.maps.LatLngBounds();
-      coords.forEach((p) => bounds.extend(new window.google.maps.LatLng(p.lat, p.lng)));
-      mapRef.current.fitBounds(bounds);
+      // Fit map to polygon bounds (only if coords valid and map exists)
+      if (coords && coords.length > 0 && mapRef.current) {
+        try {
+          const bounds = new window.google.maps.LatLngBounds();
+          coords.forEach((p) => bounds.extend(new window.google.maps.LatLng(p.lat, p.lng)));
+          mapRef.current.fitBounds(bounds);
+        } catch (e) {
+          console.warn("Could not fit bounds:", e);
+        }
+      }
     } catch (err) {
       console.error("Failed to fetch or render data:", err);
     }
