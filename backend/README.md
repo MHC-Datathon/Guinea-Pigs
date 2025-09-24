@@ -13,7 +13,7 @@ To get the server running locally, follow these steps.
 `cd backend`
 
 ### Create a virtual environment
-`python -m venv venv`
+`python3 -m venv venv`
 
 ### Activate the environment
 ### On macOS/Linux:
