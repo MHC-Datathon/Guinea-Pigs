@@ -3,7 +3,7 @@ import reactLogo from './assets/react.svg'
 import viteLogo from '/vite.svg'
 import './App.css'
 import ViolationsList from './ViolationsList'
-import Intro from './page'
+import Intro from './GoogleMaps.jsx'
 
 function App() {
   const [count, setCount] = useState(0)
