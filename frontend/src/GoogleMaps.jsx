@@ -508,5 +508,5 @@ export default function GoogleMapsPolygons() {
     });
   }
 
-  return <div ref={containerRef} style={{ width: "100vh", height: "100vh" }} />;
+  return <div ref={containerRef} className="map-container" />;
 }

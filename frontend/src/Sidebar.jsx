@@ -1,8 +1,9 @@
 import React, { useState } from 'react';
 import './Sidebar.css';
 import { getColorForBusRoute } from './utils';
+import ViolationsList from './ViolationsList';
 
-function Sidebar({ busRoutes, filters, onFilterChange }) {
+function Sidebar({ busRoutes, filters, onFilterChange, selectedYear, setBusRoutes }) {
   const [isOpen, setIsOpen] = useState(true);
   const plateTypes = ["PAS", "COM", "OMT", "SPO", "OMS", "SRF", "TRC"];
 
@@ -12,6 +13,9 @@ function Sidebar({ busRoutes, filters, onFilterChange }) {
         {isOpen ? '‹' : '›'}
       </button>
       <div className="sidebar-content">
+        <h1>MTA Datathon</h1>
+        <ViolationsList selectedYear={selectedYear} filters={filters} setBusRoutes={setBusRoutes} />
+
         <h2>Bus Route Legend</h2>
         <ul className="legend-list">
           {busRoutes.map(routeId => (

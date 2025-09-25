@@ -1,6 +1,5 @@
 import { useState } from 'react';
 import './App.css';
-import ViolationsList from './ViolationsList';
 import GoogleMapsPolygons from './GoogleMaps';
 import YearSlider from './YearSlider';
 import Sidebar from './Sidebar';
@@ -22,16 +21,17 @@ function App() {
 
   return (
     <>
-      <Sidebar busRoutes={busRoutes} filters={filters} onFilterChange={handleFilterChange} />
+      <Sidebar 
+        busRoutes={busRoutes} 
+        filters={filters} 
+        onFilterChange={handleFilterChange} 
+        selectedYear={selectedYear}
+        setBusRoutes={setBusRoutes}
+      />
 
-      <div className="main-content">
-        <h1>MTA Datathon</h1>
-        <div className="card">
-          <ViolationsList selectedYear={selectedYear} filters={filters} setBusRoutes={setBusRoutes} />
-          <GoogleMapsPolygons />
-        </div>
-        <YearSlider year={selectedYear} onYearChange={setSelectedYear} />
-      </div>
+      <GoogleMapsPolygons />
+
+      <YearSlider year={selectedYear} onYearChange={setSelectedYear} />
     </>
   )
 }
