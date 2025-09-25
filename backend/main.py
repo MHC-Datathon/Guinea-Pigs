@@ -9,7 +9,7 @@ app = FastAPI()
 origins = [
     "http://localhost:5173",
     "http://localhost:3000",
-    "https://mhc-datathon.github.io/Guinea-Pigs/",
+    "https://mhc-datathon.github.io",
 ]
 
 app.add_middleware(
