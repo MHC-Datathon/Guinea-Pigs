@@ -8,6 +8,8 @@ function ViolationsList({ selectedYear, filters, setBusRoutes }) {
 
   const controllerRef = useRef(null);
 
+  const API_BASE_URL = import.meta.env.VITE_API_BASE_URL;
+
   useEffect(() => {
     const fetchData = async () => {
       if (controllerRef.current) {
@@ -23,7 +25,7 @@ function ViolationsList({ selectedYear, filters, setBusRoutes }) {
 
       try {
         const filterParams = new URLSearchParams(filters).toString();
-        const API_URL = `http://localhost:8000/api/violations?year=${selectedYear}`;
+        const API_URL = `${API_BASE_URL}/api/violations?year=${selectedYear}&${filterParams}`;
         console.log("Fetching data for year:", selectedYear, "from:", API_URL);
         const response = await fetch(API_URL, { signal });
         console.log("3. Received response from server:", response);
