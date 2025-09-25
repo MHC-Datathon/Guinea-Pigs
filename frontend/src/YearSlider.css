@@ -1,0 +1,25 @@
+.slider-container {
+  position: fixed;
+  bottom: 0;
+  left: 0;
+  width: 100%;
+  padding: 20px;
+  background-color: #242424;
+  box-sizing: border-box;
+  display: flex;
+  align-items: center;
+  gap: 20px;
+  z-index: 1000;
+}
+
+.slider-label {
+  font-size: 1.5em;
+  font-weight: bold;
+  color: white;
+  min-width: 60px;
+  text-align: center;
+}
+
+.slider-input {
+  flex-grow: 1;
+}

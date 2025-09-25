@@ -1,38 +1,40 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-function ViolationsList() {
+function ViolationsList({ selectedYear }) {
   const [violations, setViolations] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [totalItems, setTotalItems] = useState(0);
 
   const controllerRef = useRef(null);
 
-  const fetchData = async () => {
-    if (controllerRef.current) {
-      controllerRef.current.abort();
-    }
+  useEffect(() => {
+    const fetchData = async () => {
+      if (controllerRef.current) {
+        controllerRef.current.abort();
+      }
     
-    controllerRef.current = new AbortController();
-    const signal = controllerRef.current.signal;
-    console.log("1. Fetch process started.");
+      controllerRef.current = new AbortController();
+      const signal = controllerRef.current.signal;
+      console.log("1. Fetch process started.");
 
-    setLoading(true);
-    setError('');
-    setViolations([]);
+      setLoading(true);
+      setError('');
+      setViolations([]);
 
-    try {
-        const API_URL = 'http://localhost:8000/api/violations';
-        console.log("2. Sending request to:", API_URL);
+      try {
+        const API_URL = `http://localhost:8000/api/violations?year=${selectedYear}`;
+        console.log("Fetching data for year:", selectedYear, "from:", API_URL);
         const response = await fetch(API_URL, { signal });
         console.log("3. Received response from server:", response);
         if (!response.ok) {
-            throw new Error(`HTTP error! Status: ${response.status}`);
+          throw new Error(`HTTP error! Status: ${response.status}`);
         }
         
         const result = await response.json();
         console.log("4. Parsed JSON successfully.");
         setViolations(result.data);
-        // publish the fresh violations so the map can consume and cluster them
+        setTotalItems(result.total_items);
         try {
           window.__GP_VIOLATIONS = result.data;
           window.dispatchEvent(new CustomEvent("gp-violations-updated", { detail: { violations: result.data } }));
@@ -40,34 +42,33 @@ function ViolationsList() {
           console.warn("Could not dispatch gp-violations-updated:", e);
         }
 
-    } catch (error) {
+      } catch (error) {
         if (error.name === 'AbortError') {
-            console.error("5. An error occurred:", error);
-            setError('Fetch aborted!');
+          console.log("Fetch aborted for year change.");
         } else {
-            setError(`Failed to fetch data: ${error.message}`);
-            console.error('Fetch error:', error);
+          setError(`Failed to fetch data: ${error.message}`);
+          console.error('Fetch error:', error);
         }
-    } finally {
+      } finally {
         setLoading(false);
-    }
-};
+      }
+    };
+    fetchData();
 
-  const handleCancel = () => {
-    if (controllerRef.current) {
-      controllerRef.current.abort();
-    }
-  };
+    return () => {
+      if (controllerRef.current) {
+        controllerRef.current.abort();
+      }
+    };
+
+  }, [selectedYear]);
 
   return (
     <div>
-      <h1>MTA ACE Violations</h1>
-      <button onClick={fetchData} disabled={loading}>
-        {loading ? 'Fetching...' : 'Fetch Data'}
-      </button>
-      {loading && <button onClick={handleCancel}>Cancel</button>}
+      <h2>MTA ACE Violations for {selectedYear}</h2>
+      {loading && <p>Fetching data...</p>}
       {error && <p style={{ color: 'red' }}>{error}</p>}
-      <p>Found {violations.length} records.</p>
+      {!loading && !error && <p>Found {totalItems} records.</p>}
     </div>
   );
 }

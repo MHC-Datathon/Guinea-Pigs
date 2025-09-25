@@ -1,7 +1,7 @@
 import time
 import urllib.parse
 import requests
-from fastapi import FastAPI, Request, HTTPException
+from fastapi import FastAPI, Request, Query, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 app = FastAPI()
@@ -20,19 +20,16 @@ app.add_middleware(
 )
 
 # In-Memory Cache
-cache = {
-    "data": None,
-    "last_fetched": 0
-}
-CACHE_DURATION_SECONDS = 3600
+cache = {}
+CACHE_DURATION_SECONDS = 3600  # 1 hour
 
 # API Data Fetch
 SOCRATA_API_ENDPOINT = "https://data.ny.gov/resource/kh8p-hcbm.json"
 
-def fetch_all_violation_data():
+def fetch_violations_for_year(year: int):
     """
-    Fetches all records from the Socrata API, handling pagination and applying the permanent filters to exclude exempt statuses.
-    :return: returns the fetched MTA Bus ACE Violations dataset
+    Fetches records for a specific year from the Socrata API, using a SoQL $where
+    clause to filter by both year and exempt statuses on the server side.
     """
     all_records = []
     limit = 50000
@@ -46,11 +43,11 @@ def fetch_all_violation_data():
     ]
 
     formatted_statuses = ', '.join([f"'{status}'" for status in excluded_statuses_list])
-    soql_where_clause = f"violation_status NOT IN ({formatted_statuses})"
+    soql_where_clause = f"violation_status NOT IN ({formatted_statuses}) AND date_extract_y(last_occurrence) = {year}"
 
     encoded_where_clause = urllib.parse.quote(soql_where_clause)
 
-    print("Starting to fetch data from Socrata API...")
+    print(f"Starting to fetch data for year {year} from Socrata API...")
     print(f"SoQL Filter: {soql_where_clause}")
 
     while True:
@@ -60,62 +57,80 @@ def fetch_all_violation_data():
 
         if response.status_code != 200:
             print(f"Failed to fetch data: Status code {response.status_code}")
-
-            break
+            print(f"Response: {response.text}")
+            raise HTTPException(status_code=response.status_code, detail=f"Socrata API error: {response.text}")
 
         data = response.json()
 
         if not data:
-            print("Finished fetching all data.")
+            print(f"Finished fetching all data for year {year}.")
             break
 
         all_records.extend(data)
 
         offset += limit
-        print(f"Fetched {len(data)} records. Total so far: {len(all_records)}")
+        print(f"Fetched {len(data)} records for {year}. Total so far: {len(all_records)}")
 
     return all_records
 
 # API Endpoint
 @app.get("/api/violations")
-def get_violations(request: Request):
+def get_violations(
+    request: Request,
+    year: int = Query(..., ge=2019, le=2025, description="The year to filter violations by"),
+    page: int = Query(1, ge=1, description="Page number"),
+    page_size: int = Query(50000, ge=1, le=50000, description="Items per page.")
+):
     """
-    The API endpoint that your React app will call.
-    It serves pre-filtered data from cache and applies additional
-    dynamic filters from query parameters.
+    Serves violation data, filtered by year on the server side, with per-year caching.
     :return: JSON response containing the filtered violation data
     """
     current_time = time.time()
+    year_str = str(year)
 
-    if cache["data"] is None or (current_time - cache["last_fetched"]) > CACHE_DURATION_SECONDS:
-        print("Cache is expired or empty. Fetching new data.")
-        try:
-            fresh_data = fetch_all_violation_data()
-
-            cache["data"] = fresh_data
-            cache["last_fetched"] = current_time
-            
-        except Exception as e:
-            if cache["data"] is not None:
-                print("API fetch failed, serving stale data from cache.")
-                return {"data": cache["data"], "count": len(cache["data"]), "status": "stale"}
-            raise HTTPException(status_code=500, detail=str(e))
+    if year_str in cache and (current_time - cache[year_str]["last_fetched"]) <= CACHE_DURATION_SECONDS:
+        print(f"Serving data for year {year_str} from cache.")
+        data_to_filter = cache[year_str]["data"]
     else:
-        print("Serving data from cache.")
-    
-    data_to_filter = cache["data"]
+        print(f"Cache miss or expired for year {year_str}. Fetching new data.")
+        try:
+            fresh_data = fetch_violations_for_year(year)
+            cache[year_str] = {
+                "data": fresh_data,
+                "last_fetched": current_time
+            }
+            data_to_filter = fresh_data
+        except Exception as e:
+            raise HTTPException(status_code=500, detail=str(e))
+        
     query_params = dict(request.query_params)
+    query_params.pop("year", None)    
+
+    query_params.pop("page", None)
+    query_params.pop("page_size", None)
+    filtered_data = data_to_filter
 
     if query_params:
-        print(f"Applying dynamic filters: {query_params}")
+        print(f"Applying other dynamic filters: {query_params}")
         filtered_data = [
             record for record in data_to_filter
             if all(str(record.get(key, '')).lower() == str(value).lower() for key, value in query_params.items())
         ]
-    else:
-        filtered_data = data_to_filter
+    
+    total_items = len(filtered_data)
+    start_index = (page - 1) * page_size
+    end_index = start_index + page_size
 
-    return {"data": cache["data"], "count": len(cache["data"]), "status": "cached"}
+    paginated_data = filtered_data[start_index:end_index]
+    return {
+        "data": paginated_data,
+        "count": len(paginated_data),
+        "total_items": total_items,
+        "page": page,
+        "page_size": page_size,
+        "total_pages": (total_items + page_size - 1) // page_size,
+        "status": "cached"
+    }
     
 @app.get("/")
 def read_root():
