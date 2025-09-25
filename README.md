@@ -22,7 +22,11 @@ Brooklyn College ‘27
 (insert YT link)
 
 ## Website 
+https://mhc-datathon.github.io/Guinea-Pigs/
 
-(Insert Github pages link)
+##Slideshow
+https://docs.google.com/presentation/d/1_ENKo57u5pfSSIczA3ZdJy7V8z4nCcsRIJJJg7Lzddc/edit?usp=sharing
+
+
 
 
