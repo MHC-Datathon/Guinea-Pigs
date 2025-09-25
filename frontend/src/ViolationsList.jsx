@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef } from 'react';
 
-function ViolationsList({ selectedYear }) {
+function ViolationsList({ selectedYear, filters, setBusRoutes }) {
   const [violations, setViolations] = useState([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
@@ -20,9 +20,9 @@ function ViolationsList({ selectedYear }) {
 
       setLoading(true);
       setError('');
-      setViolations([]);
 
       try {
+        const filterParams = new URLSearchParams(filters).toString();
         const API_URL = `http://localhost:8000/api/violations?year=${selectedYear}`;
         console.log("Fetching data for year:", selectedYear, "from:", API_URL);
         const response = await fetch(API_URL, { signal });
@@ -35,6 +35,8 @@ function ViolationsList({ selectedYear }) {
         console.log("4. Parsed JSON successfully.");
         setViolations(result.data);
         setTotalItems(result.total_items);
+        const uniqueRoutes = [...new Set(result.data.map(v => v.bus_route_id).filter(Boolean))].sort();
+        setBusRoutes(uniqueRoutes);
         try {
           window.__GP_VIOLATIONS = result.data;
           window.dispatchEvent(new CustomEvent("gp-violations-updated", { detail: { violations: result.data } }));
@@ -61,7 +63,7 @@ function ViolationsList({ selectedYear }) {
       }
     };
 
-  }, [selectedYear]);
+  }, [selectedYear, filters, setBusRoutes]);
 
   return (
     <div>

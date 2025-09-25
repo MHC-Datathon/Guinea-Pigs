@@ -1,6 +1,6 @@
-
 import { useEffect, useRef } from "react";
 import * as turf from "@turf/turf";
+import { getColorForBusRoute } from "./utils";
 
 const GOOGLE_MAPS_API_KEY = import.meta.env.VITE_GOOGLE_MAPS_API_KEY;
 const DATA_URL = "https://data.cityofnewyork.us/resource/f72k-2u3b.geojson";
@@ -162,41 +162,6 @@ export default function GoogleMapsPolygons() {
 
   // Choose a color for a cluster marker based on how many items it represents.
   // Small: green, medium: orange, large: red. Tweak thresholds as needed.
-
-  // Deterministic color selection for bus route IDs.
-  // You can override at runtime with window.GP_ROUTE_COLORS = { 'BX36': '#abc', ... }
-  const _routeColorCache = {};
-  // Generate 39 visually distinct, muted colors by mapping routeId hash -> hue buckets
-  // We vary lightness in three tiers to increase perceptual separation while keeping colors easy on the eyes.
-  // You can override colors at runtime with window.GP_ROUTE_COLORS = { 'BX36': '#abc', ... }
-  function getColorForBusRoute(routeId) {
-    try {
-      if (!routeId) return null;
-      const custom = window && window.GP_ROUTE_COLORS;
-      if (custom && custom[routeId]) return custom[routeId];
-      if (_routeColorCache[routeId]) return _routeColorCache[routeId];
-      // simple hash to integer
-      let h = 0;
-      for (let i = 0; i < routeId.length; i++) {
-        h = (h << 5) - h + routeId.charCodeAt(i);
-        h |= 0;
-      }
-  // Use the golden angle to spread hues for better perceptual separation
-  const buckets = 39; // number of distinct hues requested
-  const idx = Math.abs(h) % buckets;
-  const GOLDEN_ANGLE = 137.50776405003785; // degrees
-  const hue = Math.round((idx * GOLDEN_ANGLE) % 360);
-      // muted saturation and three lightness tiers to increase distinctiveness
-      const saturation = 60; // percent, slightly muted
-      const tier = idx % 3; // 0,1,2
-      const lightness = 44 + tier * 6; // values: 44,50,56
-      const color = `hsl(${hue},${saturation}%,${lightness}%)`;
-      _routeColorCache[routeId] = color;
-      return color;
-    } catch (e) {
-      return null;
-    }
-  }
 
   // Naive clustering: bucket points into screen-space grid cells
   function renderClusters(violations) {
